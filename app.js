@@ -735,21 +735,27 @@
 
       this.boardEl.appendChild(fragment);
       this.updateCellSize(level.rows, level.cols);
+      window.requestAnimationFrame(() => {
+        this.updateCellSize(level.rows, level.cols);
+      });
     }
 
     updateCellSize(rows, cols) {
       const viewportWidth = Math.max(document.documentElement.clientWidth, window.innerWidth || 0);
-      const viewportHeight = Math.max(document.documentElement.clientHeight, window.innerHeight || 0);
+      const compact = viewportWidth < 760;
+      const boardShellStyle = window.getComputedStyle(this.boardShell);
+      const paddingX = (parseFloat(boardShellStyle.paddingLeft) || 0) + (parseFloat(boardShellStyle.paddingRight) || 0);
+      const paddingY = (parseFloat(boardShellStyle.paddingTop) || 0) + (parseFloat(boardShellStyle.paddingBottom) || 0);
 
-      const horizontalPadding = viewportWidth < 640 ? 48 : 108;
-      const verticalPadding = viewportHeight < 760 ? 236 : 300;
-      const maxBoardWidth = Math.max(220, viewportWidth - horizontalPadding);
-      const maxBoardHeight = Math.max(200, viewportHeight - verticalPadding);
-      const gap = viewportWidth < 640 ? 4 : 6;
+      const maxBoardWidth = Math.max(120, this.boardShell.clientWidth - paddingX - 2);
+      const maxBoardHeight = Math.max(120, this.boardShell.clientHeight - paddingY - 2);
+      const gap = compact ? 2 : (viewportWidth < 1160 ? 4 : 6);
 
       const sizeByWidth = Math.floor((maxBoardWidth - (cols - 1) * gap) / cols);
       const sizeByHeight = Math.floor((maxBoardHeight - (rows - 1) * gap) / rows);
-      const target = clamp(Math.min(sizeByWidth, sizeByHeight), 18, 40);
+      const minSize = compact ? 10 : 14;
+      const maxSize = viewportWidth > 1500 ? 46 : 40;
+      const target = clamp(Math.min(sizeByWidth, sizeByHeight), minSize, maxSize);
 
       this.boardEl.style.setProperty("--cell-size", `${target}px`);
       this.boardEl.style.setProperty("--cell-gap", `${gap}px`);

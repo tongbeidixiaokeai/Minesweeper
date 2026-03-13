@@ -37,37 +37,40 @@
         </div>
       </section>
 
-      <section id="board-shell" class="board-shell" aria-label="棋盘容器">
-        <div id="board" class="board" role="grid" aria-label="扫雷棋盘"></div>
-      </section>
+      <section class="ms-content" aria-label="核心区域">
+        <section class="board-area" aria-label="棋盘区域">
+          <section id="board-shell" class="board-shell" aria-label="棋盘容器">
+            <div id="board" class="board" role="grid" aria-label="扫雷棋盘"></div>
+          </section>
+          <p class="ms-hint">操作提示：左键/轻触翻开，右键或长按插旗；对已翻开的数字格右键可快速展开周围。</p>
+        </section>
 
-      <p class="ms-hint">操作提示：左键/轻触翻开，右键或长按插旗；对已翻开的数字格右键可快速展开周围。</p>
+        <aside class="records-panel" aria-label="历史记录与排行">
+          <div class="records-head">
+            <h2 class="records-title">历史记录与排行</h2>
+            <button id="clear-records-btn" class="clear-records-btn" type="button">清空记录</button>
+          </div>
 
-      <section class="records-panel" aria-label="历史记录与排行">
-        <div class="records-head">
-          <h2 class="records-title">历史记录与排行</h2>
-          <button id="clear-records-btn" class="clear-records-btn" type="button">清空记录</button>
-        </div>
+          <div class="records-grid">
+            <article class="rank-card">
+              <h3 class="rank-title">初级 Top 5</h3>
+              <ol id="rank-beginner" class="rank-list"></ol>
+            </article>
+            <article class="rank-card">
+              <h3 class="rank-title">中级 Top 5</h3>
+              <ol id="rank-intermediate" class="rank-list"></ol>
+            </article>
+            <article class="rank-card">
+              <h3 class="rank-title">高级 Top 5</h3>
+              <ol id="rank-expert" class="rank-list"></ol>
+            </article>
+          </div>
 
-        <div class="records-grid">
-          <article class="rank-card">
-            <h3 class="rank-title">初级 Top 5</h3>
-            <ol id="rank-beginner" class="rank-list"></ol>
+          <article class="history-card">
+            <h3 class="rank-title">最近对局</h3>
+            <ul id="history-list" class="history-list"></ul>
           </article>
-          <article class="rank-card">
-            <h3 class="rank-title">中级 Top 5</h3>
-            <ol id="rank-intermediate" class="rank-list"></ol>
-          </article>
-          <article class="rank-card">
-            <h3 class="rank-title">高级 Top 5</h3>
-            <ol id="rank-expert" class="rank-list"></ol>
-          </article>
-        </div>
-
-        <article class="history-card">
-          <h3 class="rank-title">最近对局</h3>
-          <ul id="history-list" class="history-list"></ul>
-        </article>
+        </aside>
       </section>
     </main>
   </div>

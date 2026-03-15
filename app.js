@@ -17,9 +17,22 @@
   const DEFAULT_OPTIONS = Object.freeze({
     longPressMs: 360,
     defaultLevel: "beginner",
+    zoomLevel: "auto",
+    flagLock: null,
+    contrastMode: "medium",
     autoStart: true
   });
   const STORAGE_KEY = "minesweeper.records.v1";
+  const UI_STORAGE_KEY = "minesweeper.ui.v1";
+  const ZOOM_LEVELS = Object.freeze(["auto", "100", "125", "150", "175", "200"]);
+  const ZOOM_SCALE_MAP = Object.freeze({
+    auto: 1,
+    "100": 1,
+    "125": 1.25,
+    "150": 1.5,
+    "175": 1.75,
+    "200": 2
+  });
 
   function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
@@ -34,6 +47,33 @@
 
   function getLevel(levelKey) {
     return LEVELS[levelKey] || LEVELS.beginner;
+  }
+
+  function normalizeZoomLevel(value) {
+    const key = String(value || "auto");
+    return Object.prototype.hasOwnProperty.call(ZOOM_SCALE_MAP, key) ? key : "auto";
+  }
+
+  function getZoomScale(zoomLevel) {
+    return ZOOM_SCALE_MAP[normalizeZoomLevel(zoomLevel)];
+  }
+
+  function normalizeContrastMode(value) {
+    const mode = String(value || "medium");
+    return mode === "medium" ? mode : "medium";
+  }
+
+  function detectTouchDevice() {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    if ("ontouchstart" in window) {
+      return true;
+    }
+    if (typeof navigator !== "undefined" && Number(navigator.maxTouchPoints) > 0) {
+      return true;
+    }
+    return typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
   }
 
   function formatElapsed(seconds) {
@@ -459,14 +499,22 @@
     constructor(rootEl, options) {
       this.rootEl = rootEl;
       this.longPressMs = options.longPressMs;
+      this.zoomLevel = normalizeZoomLevel(options.zoomLevel);
+      this.flagLockEnabled = Boolean(options.flagLock);
+      this.contrastMode = normalizeContrastMode(options.contrastMode);
       this.boardEl = rootEl.querySelector("#board");
       this.boardShell = rootEl.querySelector("#board-shell");
       this.timerEl = rootEl.querySelector("#timer");
       this.minesLeftEl = rootEl.querySelector("#mines-left");
+      this.misTouchEl = rootEl.querySelector("#mistouch-count");
+      this.wrongChordEl = rootEl.querySelector("#wrong-chord-count");
       this.statusPillEl = rootEl.querySelector("#status-pill");
       this.restartBtn = rootEl.querySelector("#restart-btn");
+      this.zoomButtons = Array.from(rootEl.querySelectorAll(".zoom-btn"));
+      this.flagLockBtn = rootEl.querySelector("#flag-lock-btn");
       this.levelButtons = Array.from(rootEl.querySelectorAll(".level-btn"));
       this.clearRecordsBtn = rootEl.querySelector("#clear-records-btn");
+      this.hintEl = rootEl.querySelector(".ms-hint");
       this.rankEls = {
         beginner: rootEl.querySelector("#rank-beginner"),
         intermediate: rootEl.querySelector("#rank-intermediate"),
@@ -487,7 +535,9 @@
         onChord: null,
         onRestart: null,
         onLevelChange: null,
-        onClearRecords: null
+        onClearRecords: null,
+        onZoomChange: null,
+        onFlagLockToggle: null
       };
 
       this.animator = new Animator(this.boardShell, this.boardEl);
@@ -499,11 +549,18 @@
       this.boundOnKeyboardClick = this.onKeyboardClick.bind(this);
       this.boundOnBoardKeyDown = this.onBoardKeyDown.bind(this);
       this.boundOnResize = this.onResize.bind(this);
+      this.boundOnWheel = this.onWheel.bind(this);
+      this.boundOnWindowKeyDown = this.onWindowKeyDown.bind(this);
       this.boundOnRestart = this.onRestart.bind(this);
       this.boundOnLevelClick = this.onLevelClick.bind(this);
       this.boundOnClearRecords = this.onClearRecords.bind(this);
+      this.boundOnZoomClick = this.onZoomClick.bind(this);
+      this.boundOnFlagLockClick = this.onFlagLockClick.bind(this);
 
       this.bindEvents();
+      this.setContrastMode(this.contrastMode);
+      this.setZoomLevel(this.zoomLevel);
+      this.setFlagLockEnabled(this.flagLockEnabled);
     }
 
     bindEvents() {
@@ -511,8 +568,10 @@
       this.boardEl.addEventListener("pointerup", this.boundOnPointerUp);
       this.boardEl.addEventListener("pointercancel", this.boundOnPointerCancel);
       this.boardShell.addEventListener("contextmenu", this.boundOnContextMenu);
+      this.boardShell.addEventListener("wheel", this.boundOnWheel, { passive: false });
       this.boardEl.addEventListener("click", this.boundOnKeyboardClick);
       this.boardEl.addEventListener("keydown", this.boundOnBoardKeyDown);
+      window.addEventListener("keydown", this.boundOnWindowKeyDown);
       window.addEventListener("resize", this.boundOnResize);
 
       if (this.restartBtn) {
@@ -520,6 +579,13 @@
       }
       if (this.clearRecordsBtn) {
         this.clearRecordsBtn.addEventListener("click", this.boundOnClearRecords);
+      }
+      if (this.flagLockBtn) {
+        this.flagLockBtn.addEventListener("click", this.boundOnFlagLockClick);
+      }
+
+      for (let i = 0; i < this.zoomButtons.length; i += 1) {
+        this.zoomButtons[i].addEventListener("click", this.boundOnZoomClick);
       }
 
       for (let i = 0; i < this.levelButtons.length; i += 1) {
@@ -552,6 +618,113 @@
       this.handlers.onLevelChange(levelKey);
     }
 
+    onZoomClick(event) {
+      const btn = event.currentTarget;
+      const zoomLevel = btn && btn.dataset ? normalizeZoomLevel(btn.dataset.zoom) : "auto";
+      this.setZoomLevel(zoomLevel, true);
+    }
+
+    onFlagLockClick() {
+      this.setFlagLockEnabled(!this.flagLockEnabled, true);
+    }
+
+    onWheel(event) {
+      if (!event.ctrlKey) {
+        return;
+      }
+      event.preventDefault();
+
+      const direction = event.deltaY < 0 ? 1 : -1;
+      this.adjustZoomByWheel(direction);
+    }
+
+    onWindowKeyDown(event) {
+      if (!event.ctrlKey) {
+        return;
+      }
+      if (event.key === "0") {
+        event.preventDefault();
+        this.setZoomLevel("auto", true);
+        return;
+      }
+      if (event.key === "+" || event.key === "=") {
+        event.preventDefault();
+        this.adjustZoomByWheel(1);
+        return;
+      }
+      if (event.key === "-" || event.key === "_") {
+        event.preventDefault();
+        this.adjustZoomByWheel(-1);
+      }
+    }
+
+    adjustZoomByWheel(direction) {
+      if (direction === 0) {
+        return;
+      }
+      let nextLevel = this.zoomLevel;
+      if (this.zoomLevel === "auto") {
+        nextLevel = direction > 0 ? "125" : "100";
+      } else {
+        const index = ZOOM_LEVELS.indexOf(this.zoomLevel);
+        const nextIndex = clamp(index + direction, 1, ZOOM_LEVELS.length - 1);
+        nextLevel = ZOOM_LEVELS[nextIndex];
+      }
+      this.setZoomLevel(nextLevel, true);
+    }
+
+    setZoomLevel(zoomLevel, emit) {
+      const normalized = normalizeZoomLevel(zoomLevel);
+      if (this.zoomLevel === normalized && emit) {
+        return;
+      }
+      this.zoomLevel = normalized;
+
+      for (let i = 0; i < this.zoomButtons.length; i += 1) {
+        const btn = this.zoomButtons[i];
+        const isActive = normalizeZoomLevel(btn.dataset.zoom) === normalized;
+        btn.classList.toggle("is-active", isActive);
+        btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+      }
+
+      this.updateCellSize(this.currentLevel.rows, this.currentLevel.cols);
+
+      if (emit && typeof this.handlers.onZoomChange === "function") {
+        this.handlers.onZoomChange(normalized);
+      }
+    }
+
+    setFlagLockEnabled(enabled, emit) {
+      const next = Boolean(enabled);
+      if (this.flagLockEnabled === next && emit) {
+        return;
+      }
+      this.flagLockEnabled = next;
+      this.rootEl.classList.toggle("is-flag-lock", next);
+
+      if (this.flagLockBtn) {
+        this.flagLockBtn.classList.toggle("is-active", next);
+        this.flagLockBtn.setAttribute("aria-pressed", next ? "true" : "false");
+        this.flagLockBtn.textContent = next ? "Flag Lock: ON" : "Flag Lock: OFF";
+      }
+
+      if (this.hintEl) {
+        this.hintEl.textContent = next
+          ? "Flag lock is ON: click/tap to place flags. Use Enter/Space to reveal. Zoom: Ctrl+wheel / Ctrl+Plus / Ctrl+Minus."
+          : "Tips: Left click/tap to reveal, right click (or long press) to flag, right click number cell to chord. Zoom: Ctrl+wheel / Ctrl+Plus / Ctrl+Minus.";
+      }
+
+      if (emit && typeof this.handlers.onFlagLockToggle === "function") {
+        this.handlers.onFlagLockToggle(next);
+      }
+    }
+
+    setContrastMode(mode) {
+      const normalized = normalizeContrastMode(mode);
+      this.contrastMode = normalized;
+      this.rootEl.classList.toggle("is-contrast-medium", normalized === "medium");
+    }
+
     onPointerDown(event) {
       const cellEl = event.target.closest(".cell");
       if (!cellEl) {
@@ -565,6 +738,15 @@
       const row = Number(cellEl.dataset.row);
       const col = Number(cellEl.dataset.col);
       if (!Number.isInteger(row) || !Number.isInteger(col)) {
+        return;
+      }
+
+      if (this.flagLockEnabled) {
+        if (typeof this.handlers.onFlag === "function") {
+          this.handlers.onFlag(row, col);
+          this.animator.animateFlag(cellEl);
+        }
+        event.preventDefault();
         return;
       }
 
@@ -604,17 +786,26 @@
         window.clearTimeout(active.timer);
         this.activePresses.delete(event.pointerId);
 
-        if (!active.longPressed && typeof this.handlers.onReveal === "function") {
-          this.handlers.onReveal(active.row, active.col);
+        if (!active.longPressed) {
+          if (this.flagLockEnabled && typeof this.handlers.onFlag === "function") {
+            this.handlers.onFlag(active.row, active.col);
+          } else if (typeof this.handlers.onReveal === "function") {
+            this.handlers.onReveal(active.row, active.col);
+          }
         }
         return;
       }
 
-      if (event.pointerType === "mouse" && event.button === 0 && cellEl && typeof this.handlers.onReveal === "function") {
+      if (event.pointerType === "mouse" && event.button === 0 && cellEl) {
         const row = Number(cellEl.dataset.row);
         const col = Number(cellEl.dataset.col);
         if (Number.isInteger(row) && Number.isInteger(col)) {
-          this.handlers.onReveal(row, col);
+          if (this.flagLockEnabled && typeof this.handlers.onFlag === "function") {
+            this.handlers.onFlag(row, col);
+            this.animator.animateFlag(cellEl);
+          } else if (typeof this.handlers.onReveal === "function") {
+            this.handlers.onReveal(row, col);
+          }
         }
       }
     }
@@ -664,13 +855,17 @@
         return;
       }
       const cellEl = event.target.closest(".cell");
-      if (!cellEl || typeof this.handlers.onReveal !== "function") {
+      if (!cellEl) {
         return;
       }
       const row = Number(cellEl.dataset.row);
       const col = Number(cellEl.dataset.col);
       if (Number.isInteger(row) && Number.isInteger(col)) {
-        this.handlers.onReveal(row, col);
+        if (this.flagLockEnabled && typeof this.handlers.onFlag === "function") {
+          this.handlers.onFlag(row, col);
+        } else if (typeof this.handlers.onReveal === "function") {
+          this.handlers.onReveal(row, col);
+        }
       }
     }
 
@@ -754,8 +949,11 @@
       const sizeByWidth = Math.floor((maxBoardWidth - (cols - 1) * gap) / cols);
       const sizeByHeight = Math.floor((maxBoardHeight - (rows - 1) * gap) / rows);
       const minSize = compact ? 10 : 14;
-      const maxSize = viewportWidth > 1500 ? 46 : 40;
-      const target = clamp(Math.min(sizeByWidth, sizeByHeight), minSize, maxSize);
+      const dpr = Number(window.devicePixelRatio) || 1;
+      const maxSize = viewportWidth > 1900 ? 72 : (viewportWidth > 1500 ? 64 : 52);
+      const base = clamp(Math.min(sizeByWidth, sizeByHeight), minSize, maxSize);
+      const scaled = clamp(base * getZoomScale(this.zoomLevel), minSize, maxSize);
+      const target = clamp(Math.round(scaled * dpr) / dpr, minSize, maxSize);
 
       this.boardEl.style.setProperty("--cell-size", `${target}px`);
       this.boardEl.style.setProperty("--cell-gap", `${gap}px`);
@@ -923,6 +1121,15 @@
       this.minesLeftEl.textContent = formatCounter(stats.minesLeft);
     }
 
+    updateInteractionStats(stats) {
+      if (this.misTouchEl) {
+        this.misTouchEl.textContent = formatCounter(clamp(stats && stats.misTouchLosses, 0, 999));
+      }
+      if (this.wrongChordEl) {
+        this.wrongChordEl.textContent = formatCounter(clamp(stats && stats.wrongChordAttempts, 0, 999));
+      }
+    }
+
     updateStatus(state, message) {
       this.statusPillEl.textContent = message || STATUS_TEXT[state] || STATUS_TEXT.idle;
       this.statusPillEl.classList.remove("is-playing", "is-won", "is-lost");
@@ -943,8 +1150,10 @@
       this.boardEl.removeEventListener("pointerup", this.boundOnPointerUp);
       this.boardEl.removeEventListener("pointercancel", this.boundOnPointerCancel);
       this.boardShell.removeEventListener("contextmenu", this.boundOnContextMenu);
+      this.boardShell.removeEventListener("wheel", this.boundOnWheel);
       this.boardEl.removeEventListener("click", this.boundOnKeyboardClick);
       this.boardEl.removeEventListener("keydown", this.boundOnBoardKeyDown);
+      window.removeEventListener("keydown", this.boundOnWindowKeyDown);
       window.removeEventListener("resize", this.boundOnResize);
 
       if (this.restartBtn) {
@@ -952,6 +1161,13 @@
       }
       if (this.clearRecordsBtn) {
         this.clearRecordsBtn.removeEventListener("click", this.boundOnClearRecords);
+      }
+      if (this.flagLockBtn) {
+        this.flagLockBtn.removeEventListener("click", this.boundOnFlagLockClick);
+      }
+
+      for (let i = 0; i < this.zoomButtons.length; i += 1) {
+        this.zoomButtons[i].removeEventListener("click", this.boundOnZoomClick);
       }
 
       for (let i = 0; i < this.levelButtons.length; i += 1) {
@@ -968,19 +1184,24 @@
       this.state = "idle";
       this.elapsed = 0;
       this.timerId = 0;
+      this.chordTimerId = 0;
+      this.interactionStats = this.createInteractionStats();
     }
 
     start(levelKey) {
       this.level = getLevel(levelKey);
       this.stopTimer();
+      this.clearChordTimer();
 
       this.board = new BoardModel(this.level.rows, this.level.cols, this.level.mines);
       this.state = "idle";
       this.elapsed = 0;
+      this.interactionStats = this.createInteractionStats();
 
       this.callbacks.onBoardReady(this.board, this.level);
       this.callbacks.onStatusChange(this.state, STATUS_TEXT.idle);
       this.emitStats();
+      this.emitInteractionStats();
     }
 
     restart() {
@@ -1010,7 +1231,7 @@
       }
 
       if (revealResult.exploded) {
-        this.finishLost(revealResult.trigger || target);
+        this.finishLost(revealResult.trigger || target, "reveal");
         return;
       }
 
@@ -1036,10 +1257,35 @@
       const hiddenNeighbors = neighbors.filter((cell) => !cell.isRevealed && !cell.isFlagged);
       if (hiddenNeighbors.length > 0 && typeof this.callbacks.onChordPreview === "function") {
         this.callbacks.onChordPreview(hiddenNeighbors);
+        this.clearChordTimer();
+        this.chordTimerId = window.setTimeout(() => {
+          this.chordTimerId = 0;
+          this.executeChord(row, col);
+        }, 90);
+        return;
       }
 
+      this.executeChord(row, col);
+    }
+
+    executeChord(row, col) {
+      if (!this.board || this.state !== "playing") {
+        return;
+      }
+
+      const center = this.board.getCell(row, col);
+      if (!center || !center.isRevealed || center.isMine || center.adjacent <= 0) {
+        return;
+      }
+
+      const neighbors = this.board.getNeighbors(row, col);
+      const hiddenNeighbors = neighbors.filter((cell) => !cell.isRevealed && !cell.isFlagged);
       const flaggedCount = neighbors.reduce((count, cell) => count + (cell.isFlagged ? 1 : 0), 0);
       if (flaggedCount !== center.adjacent || hiddenNeighbors.length === 0) {
+        if (hiddenNeighbors.length > 0 && flaggedCount !== center.adjacent) {
+          this.interactionStats.wrongChordAttempts = clamp(this.interactionStats.wrongChordAttempts + 1, 0, 999);
+          this.emitInteractionStats();
+        }
         return;
       }
 
@@ -1072,7 +1318,7 @@
       }
 
       if (explodedTrigger) {
-        this.finishLost(explodedTrigger);
+        this.finishLost(explodedTrigger, "chord");
         return;
       }
 
@@ -1097,23 +1343,30 @@
       this.emitStats();
     }
 
-    finishLost(triggerCell) {
+    finishLost(triggerCell, source) {
       this.state = "lost";
       this.stopTimer();
+      this.clearChordTimer();
+      if (source === "reveal") {
+        this.interactionStats.misTouchLosses = clamp(this.interactionStats.misTouchLosses + 1, 0, 999);
+      }
       const lossChanges = this.board.revealMinesOnLoss(triggerCell);
       this.callbacks.onCellsChanged(lossChanges, { type: "loss" });
       this.callbacks.onStatusChange(this.state, STATUS_TEXT.lost);
       this.emitStats();
+      this.emitInteractionStats();
       this.emitGameFinished("lost");
     }
 
     finishWon() {
       this.state = "won";
       this.stopTimer();
+      this.clearChordTimer();
       const autoFlagChanges = this.board.autoFlagRemainingMines();
       this.callbacks.onCellsChanged(autoFlagChanges, { type: "win" });
       this.callbacks.onStatusChange(this.state, STATUS_TEXT.won);
       this.emitStats();
+      this.emitInteractionStats();
       this.emitGameFinished("won");
     }
 
@@ -1139,6 +1392,23 @@
       });
     }
 
+    createInteractionStats() {
+      return {
+        misTouchLosses: 0,
+        wrongChordAttempts: 0
+      };
+    }
+
+    emitInteractionStats() {
+      if (typeof this.callbacks.onInteractionStatsChange !== "function") {
+        return;
+      }
+      this.callbacks.onInteractionStatsChange({
+        misTouchLosses: this.interactionStats.misTouchLosses,
+        wrongChordAttempts: this.interactionStats.wrongChordAttempts
+      });
+    }
+
     startTimer() {
       if (this.timerId !== 0) {
         return;
@@ -1160,8 +1430,17 @@
       this.timerId = 0;
     }
 
+    clearChordTimer() {
+      if (this.chordTimerId === 0) {
+        return;
+      }
+      window.clearTimeout(this.chordTimerId);
+      this.chordTimerId = 0;
+    }
+
     destroy() {
       this.stopTimer();
+      this.clearChordTimer();
     }
   }
 
@@ -1280,6 +1559,72 @@
     }
   }
 
+  class UISettingsStore {
+    constructor(storageKey = UI_STORAGE_KEY) {
+      this.storageKey = storageKey;
+      this.isAvailable = typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+      this.data = this.load();
+    }
+
+    createDefaults() {
+      return {
+        zoomLevel: DEFAULT_OPTIONS.zoomLevel,
+        contrastMode: DEFAULT_OPTIONS.contrastMode,
+        flagLock: detectTouchDevice()
+      };
+    }
+
+    normalize(input) {
+      const defaults = this.createDefaults();
+      const source = input && typeof input === "object" ? input : {};
+      return {
+        zoomLevel: normalizeZoomLevel(source.zoomLevel || defaults.zoomLevel),
+        contrastMode: normalizeContrastMode(source.contrastMode || defaults.contrastMode),
+        flagLock: typeof source.flagLock === "boolean" ? source.flagLock : defaults.flagLock
+      };
+    }
+
+    load() {
+      if (!this.isAvailable) {
+        return this.createDefaults();
+      }
+      try {
+        const raw = window.localStorage.getItem(this.storageKey);
+        if (!raw) {
+          return this.createDefaults();
+        }
+        return this.normalize(JSON.parse(raw));
+      } catch (_err) {
+        return this.createDefaults();
+      }
+    }
+
+    save() {
+      if (!this.isAvailable) {
+        return;
+      }
+      try {
+        window.localStorage.setItem(this.storageKey, JSON.stringify(this.data));
+      } catch (_err) {
+        // Ignore write failures in restricted/private mode.
+      }
+    }
+
+    setSettings(partial) {
+      this.data = this.normalize({ ...this.data, ...partial });
+      this.save();
+      return this.getSnapshot();
+    }
+
+    getSnapshot() {
+      return {
+        zoomLevel: this.data.zoomLevel,
+        contrastMode: this.data.contrastMode,
+        flagLock: this.data.flagLock
+      };
+    }
+  }
+
   class MinesweeperGame {
     constructor(rootEl, options = {}) {
       const resolvedRoot = typeof rootEl === "string" ? document.querySelector(rootEl) : rootEl;
@@ -1287,16 +1632,23 @@
         throw new Error("未找到扫雷挂载节点。");
       }
 
-      this.options = { ...DEFAULT_OPTIONS, ...options };
+      const incomingOptions = options && typeof options === "object" ? options : {};
+      this.options = { ...DEFAULT_OPTIONS, ...incomingOptions };
       this.recordStore = new RecordStore();
+      this.uiSettingsStore = new UISettingsStore();
+      this.uiSettings = this.buildInitialUISettings(incomingOptions, this.uiSettingsStore.getSnapshot());
       this.renderer = new Renderer(resolvedRoot, {
-        longPressMs: this.options.longPressMs
+        longPressMs: this.options.longPressMs,
+        zoomLevel: this.uiSettings.zoomLevel,
+        flagLock: this.uiSettings.flagLock,
+        contrastMode: this.uiSettings.contrastMode
       });
       this.controller = new GameController({
         onBoardReady: (board, level) => this.renderer.renderBoard(board, level),
         onCellsChanged: (changes, meta) => this.renderer.updateCells(changes, meta),
         onStatusChange: (state, message) => this.renderer.updateStatus(state, message),
         onStatsChange: (stats) => this.renderer.updateStats(stats),
+        onInteractionStatsChange: (stats) => this.renderer.updateInteractionStats(stats),
         onChordPreview: (cells) => this.renderer.previewChord(cells),
         onGameFinished: (game) => {
           this.recordStore.recordGame(game);
@@ -1310,13 +1662,34 @@
         onChord: (row, col) => this.controller.chord(row, col),
         onRestart: () => this.restart(),
         onLevelChange: (levelKey) => this.start(levelKey),
-        onClearRecords: () => this.clearRecords()
+        onClearRecords: () => this.clearRecords(),
+        onZoomChange: (zoomLevel) => this.updateUISettings({ zoomLevel }),
+        onFlagLockToggle: (flagLock) => this.updateUISettings({ flagLock })
       });
 
       if (this.options.autoStart) {
         this.start(this.options.defaultLevel);
       }
       this.renderer.renderRecords(this.recordStore.getSnapshot());
+    }
+
+    buildInitialUISettings(options, storedSettings) {
+      const initial = { ...storedSettings };
+      if (Object.prototype.hasOwnProperty.call(options, "zoomLevel") && options.zoomLevel != null) {
+        initial.zoomLevel = normalizeZoomLevel(options.zoomLevel);
+      }
+      if (Object.prototype.hasOwnProperty.call(options, "contrastMode") && options.contrastMode != null) {
+        initial.contrastMode = normalizeContrastMode(options.contrastMode);
+      }
+      if (Object.prototype.hasOwnProperty.call(options, "flagLock") && typeof options.flagLock === "boolean") {
+        initial.flagLock = options.flagLock;
+      }
+      this.uiSettingsStore.setSettings(initial);
+      return this.uiSettingsStore.getSnapshot();
+    }
+
+    updateUISettings(partial) {
+      this.uiSettings = this.uiSettingsStore.setSettings(partial);
     }
 
     start(levelKey) {
@@ -1348,6 +1721,9 @@
     window.__minesweeper = new MinesweeperGame(rootEl, {
       defaultLevel: DEFAULT_OPTIONS.defaultLevel,
       longPressMs: DEFAULT_OPTIONS.longPressMs,
+      zoomLevel: DEFAULT_OPTIONS.zoomLevel,
+      flagLock: DEFAULT_OPTIONS.flagLock,
+      contrastMode: DEFAULT_OPTIONS.contrastMode,
       autoStart: true
     });
   });

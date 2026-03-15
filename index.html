@@ -22,6 +22,15 @@
             <button class="level-btn" data-level="expert" type="button">高级</button>
           </div>
           <button id="restart-btn" class="restart-btn" type="button">重新开始</button>
+          <div id="zoom-controls" class="ms-zoom" role="group" aria-label="棋盘缩放">
+            <button class="zoom-btn is-active" data-zoom="auto" type="button" aria-pressed="true">Auto</button>
+            <button class="zoom-btn" data-zoom="100" type="button" aria-pressed="false">100%</button>
+            <button class="zoom-btn" data-zoom="125" type="button" aria-pressed="false">125%</button>
+            <button class="zoom-btn" data-zoom="150" type="button" aria-pressed="false">150%</button>
+            <button class="zoom-btn" data-zoom="175" type="button" aria-pressed="false">175%</button>
+            <button class="zoom-btn" data-zoom="200" type="button" aria-pressed="false">200%</button>
+          </div>
+          <button id="flag-lock-btn" class="flag-lock-btn" type="button" aria-pressed="false">Flag Lock: OFF</button>
         </div>
       </header>
 
@@ -31,6 +40,14 @@
           <strong id="mines-left" class="hud-value">010</strong>
         </div>
         <div id="status-pill" class="status-pill">准备开始</div>
+        <div class="hud-item">
+          <span class="hud-label">误触翻雷</span>
+          <strong id="mistouch-count" class="hud-value">000</strong>
+        </div>
+        <div class="hud-item">
+          <span class="hud-label">错误和弦</span>
+          <strong id="wrong-chord-count" class="hud-value">000</strong>
+        </div>
         <div class="hud-item">
           <span class="hud-label">计时</span>
           <strong id="timer" class="hud-value">000</strong>

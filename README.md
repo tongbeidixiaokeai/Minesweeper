@@ -1,43 +1,100 @@
-# Minesweeper
+﻿# Mini Arcade Hub
 
-一个可直接双击运行的精致网页扫雷小游戏（纯前端，无需后端）。
+一个可扩展的网页小游戏大厅，当前内置：
+- 扫雷（Minesweeper）
+- 3D 赛车（Three.js / WebGL）
 
-## 功能特性
+## 黑屏原因说明
 
-- 三档难度：初级 `9x9/10雷`、中级 `16x16/40雷`、高级 `30x16/99雷`
-- 标准规则：
-  - 首次点击必不踩雷
-  - 递归展开空白区
-  - 右键插旗 / 取消插旗
-  - 数字格右键和弦开格（旗子数匹配时快速展开周围）
-- 动画与视觉：
-  - 低饱和、轻玻璃质感界面
-  - 翻格平滑动画、胜利高光、失败震动与爆雷反馈
-  - 数字格右击时周围目标格同步膨胀预览动画
-- 历史记录与排名：
-  - 每个难度 `Top 5` 通关时间排行榜
-  - 最近对局历史（胜负、难度、耗时、时间）
-  - 本地持久化存储（`localStorage`）
+你看到的黑屏主要是因为之前赛车页通过 CDN 直接 `import three`，在本地 `file://` 打开时，浏览器会触发模块跨域/安全策略，导致脚本不执行。
 
-## 运行方式
+现在已改为工程化依赖：
+- 赛车页 `games/racer3d/app.js` 改成 `import * as THREE from "three"`
+- 通过 `Vite` 启动开发服务器和构建，避免 `file://` 模式问题
 
-直接打开 `index.html` 即可运行。
+## 快速开始（工程化）
+
+Windows 一键启动（推荐）：
+
+```bat
+start-dev.cmd
+```
+
+双击根目录 `start-dev.cmd` 也可以，脚本会自动安装依赖并启动开发服务器（自动打开浏览器）。
+
+命令行方式：
+
+```bash
+npm install
+npm run dev
+```
+
+打开终端输出的本地地址（通常是 `http://localhost:5173`）。
+
+生产构建：
+
+```bash
+npm run build
+npm run preview
+```
+
+Windows 一键预览生产包：
+
+```bat
+start-preview.cmd
+```
 
 ## 操作说明
 
-- 左键 / 轻触：翻开格子
-- 右键：插旗（未翻开格）或数字格和弦开格（已翻开数字格）
-- 长按（移动端）：插旗
-- `F` 键：插旗（键盘焦点在格子上时）
-- `Enter` / 空格：翻开格子（键盘焦点在格子上时）
+### 大厅
+- 左侧底部卡片切换小游戏
+- 快捷键：`1` 切扫雷，`2` 切赛车
 
-## 文件结构
+### 扫雷
+- 左键/轻触翻开
+- 右键或长按插旗
+- 右键数字格触发和弦
 
-- `index.html`：页面结构与面板布局
-- `style.css`：主题样式、响应式布局与动效
-- `app.js`：游戏核心逻辑（BoardModel / GameController / Renderer / Animator）
+### 3D 赛车（Three.js）
+- `A/D` 或 `←/→` 转向
+- `W/S` 或 `↑/↓` 加减速
+- `R` 重开
 
-## 记录说明
+## 目录结构（规模化）
 
-- 排行与历史默认保存在浏览器 `localStorage`（键：`minesweeper.records.v1`）
-- 点击“清空记录”可清除本地历史与排行榜
+```text
+.
+├─ assets/
+│  └─ styles/
+│     └─ portal.css
+├─ src/
+│  └─ app.js
+├─ games/
+│  ├─ minesweeper/
+│  │  ├─ index.html
+│  │  ├─ style.css
+│  │  └─ app.js
+│  └─ racer3d/
+│     ├─ index.html
+│     ├─ style.css
+│     └─ app.js
+├─ index.html
+├─ package.json
+├─ vite.config.js
+└─ README.md
+```
+
+## 扩展新小游戏
+
+1. 在 `games/<game-id>/` 新建 `index.html`、`style.css`、`app.js`
+2. 在 `src/app.js` 的 `GAMES` 数组注册 `id/title/desc/path`
+3. 运行 `npm run dev`，大厅自动可选
+
+
+## Epic 赛车架构
+
+- 子系统拆分: Renderer / Physics / VehicleController / AIController / RaceRules / AssetPipeline
+- 后处理链: Bloom + SSAO + FXAA + ToneMapping + Vignette + 色差
+- 物理: Rapier 刚体与碰撞
+- 模式: 2 赛道、6 AI、3 难度、锦标赛积分与本地最佳圈速
+

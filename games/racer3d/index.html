@@ -1,0 +1,38 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Epic 3D Racing Championship</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <main class="race-root">
+    <div id="webgl-host" class="webgl-host" aria-label="3D 赛车渲染画布"></div>
+
+    <header class="race-hud">
+      <div class="hud-item"><span>速度</span><strong id="speed">000</strong></div>
+      <div class="hud-item"><span>圈数</span><strong id="lap">0/0</strong></div>
+      <div class="hud-item"><span>排名</span><strong id="position">P1</strong></div>
+      <div class="hud-item"><span>赛道</span><strong id="track">--</strong></div>
+      <div class="hud-item"><span>难度</span><strong id="difficulty">--</strong></div>
+      <div class="hud-item"><span>最佳圈速</span><strong id="best-lap">--:--</strong></div>
+      <div class="hud-item"><span>状态</span><strong id="state">READY</strong></div>
+    </header>
+
+    <section class="race-tip">
+      <p>
+        操作: A/D 或 ←/→ 转向, W/S 或 ↑/↓ 加减速, Space 手刹漂移, R 重开当前赛道, T 切换赛道, 1/2/3 切难度。
+      </p>
+    </section>
+
+    <section id="race-overlay" class="race-overlay is-hidden" aria-live="polite">
+      <h2 id="overlay-title">RACE START</h2>
+      <p id="overlay-body"></p>
+      <p class="overlay-hint">Enter 下一步</p>
+    </section>
+  </main>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

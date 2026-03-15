@@ -1,0 +1,97 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>精致扫雷</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div id="game-root" class="ms-root">
+    <main class="ms-shell" aria-label="扫雷游戏">
+      <header class="ms-header">
+        <div class="ms-title-wrap">
+          <h1 class="ms-title">Minesweeper</h1>
+          <p class="ms-subtitle">Calm, Precise, and Smooth</p>
+        </div>
+
+        <div class="ms-toolbar" aria-label="游戏控制">
+          <div class="ms-levels" role="group" aria-label="难度">
+            <button class="level-btn is-active" data-level="beginner" type="button">初级</button>
+            <button class="level-btn" data-level="intermediate" type="button">中级</button>
+            <button class="level-btn" data-level="expert" type="button">高级</button>
+          </div>
+          <button id="restart-btn" class="restart-btn" type="button">重新开始</button>
+          <div id="zoom-controls" class="ms-zoom" role="group" aria-label="棋盘缩放">
+            <button class="zoom-btn is-active" data-zoom="auto" type="button" aria-pressed="true">Auto</button>
+            <button class="zoom-btn" data-zoom="100" type="button" aria-pressed="false">100%</button>
+            <button class="zoom-btn" data-zoom="125" type="button" aria-pressed="false">125%</button>
+            <button class="zoom-btn" data-zoom="150" type="button" aria-pressed="false">150%</button>
+            <button class="zoom-btn" data-zoom="175" type="button" aria-pressed="false">175%</button>
+            <button class="zoom-btn" data-zoom="200" type="button" aria-pressed="false">200%</button>
+          </div>
+          <button id="flag-lock-btn" class="flag-lock-btn" type="button" aria-pressed="false">Flag Lock: OFF</button>
+        </div>
+      </header>
+
+      <section class="ms-hud" aria-label="状态信息">
+        <div class="hud-item">
+          <span class="hud-label">剩余雷数</span>
+          <strong id="mines-left" class="hud-value">010</strong>
+        </div>
+        <div id="status-pill" class="status-pill">准备开始</div>
+        <div class="hud-item">
+          <span class="hud-label">误触翻雷</span>
+          <strong id="mistouch-count" class="hud-value">000</strong>
+        </div>
+        <div class="hud-item">
+          <span class="hud-label">错误和弦</span>
+          <strong id="wrong-chord-count" class="hud-value">000</strong>
+        </div>
+        <div class="hud-item">
+          <span class="hud-label">计时</span>
+          <strong id="timer" class="hud-value">000</strong>
+        </div>
+      </section>
+
+      <section class="ms-content" aria-label="核心区域">
+        <section class="board-area" aria-label="棋盘区域">
+          <section id="board-shell" class="board-shell" aria-label="棋盘容器">
+            <div id="board" class="board" role="grid" aria-label="扫雷棋盘"></div>
+          </section>
+          <p class="ms-hint">操作提示：左键/轻触翻开，右键或长按插旗；对已翻开的数字格右键可快速展开周围。</p>
+        </section>
+
+        <aside class="records-panel" aria-label="历史记录与排行">
+          <div class="records-head">
+            <h2 class="records-title">历史记录与排行</h2>
+            <button id="clear-records-btn" class="clear-records-btn" type="button">清空记录</button>
+          </div>
+
+          <div class="records-grid">
+            <article class="rank-card">
+              <h3 class="rank-title">初级 Top 5</h3>
+              <ol id="rank-beginner" class="rank-list"></ol>
+            </article>
+            <article class="rank-card">
+              <h3 class="rank-title">中级 Top 5</h3>
+              <ol id="rank-intermediate" class="rank-list"></ol>
+            </article>
+            <article class="rank-card">
+              <h3 class="rank-title">高级 Top 5</h3>
+              <ol id="rank-expert" class="rank-list"></ol>
+            </article>
+          </div>
+
+          <article class="history-card">
+            <h3 class="rank-title">最近对局</h3>
+            <ul id="history-list" class="history-list"></ul>
+          </article>
+        </aside>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

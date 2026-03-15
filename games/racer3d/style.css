@@ -1,0 +1,127 @@
+﻿:root {
+  --bg: #090d14;
+  --ink: #ebf4ff;
+  --panel: rgba(10, 18, 31, 0.74);
+  --line: rgba(142, 194, 236, 0.3);
+  --accent: #8cd0ff;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+
+body {
+  font-family: "Avenir Next", "Segoe UI Variable Text", "Noto Sans SC", "PingFang SC", sans-serif;
+  color: var(--ink);
+  background: radial-gradient(1100px 600px at 50% -20%, #1a3150, transparent 72%), var(--bg);
+}
+
+.race-root {
+  min-height: 100dvh;
+  position: relative;
+  overflow: hidden;
+}
+
+.webgl-host {
+  width: 100%;
+  height: 100dvh;
+}
+
+.webgl-host canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.race-hud {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(94px, auto));
+  gap: 8px;
+  z-index: 12;
+}
+
+.hud-item {
+  min-width: 94px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(10px);
+}
+
+.hud-item span {
+  display: block;
+  font-size: 0.68rem;
+  color: #9dc3e3;
+  margin-bottom: 2px;
+}
+
+.hud-item strong {
+  font-size: 0.98rem;
+  letter-spacing: 0.04em;
+}
+
+.race-tip {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  max-width: min(95vw, 760px);
+  z-index: 12;
+}
+
+.race-tip p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #c8dcf2;
+}
+
+.race-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  text-align: center;
+  background: radial-gradient(circle at center, rgba(8, 16, 28, 0.62), rgba(6, 10, 18, 0.86));
+  z-index: 16;
+}
+
+.race-overlay.is-hidden {
+  display: none;
+}
+
+#overlay-title {
+  margin: 0;
+  font-size: clamp(1.5rem, 5vw, 2.8rem);
+  color: var(--accent);
+  letter-spacing: 0.08em;
+}
+
+#overlay-body {
+  margin: 0;
+  font-size: 1rem;
+  color: #d9e9fa;
+}
+
+.overlay-hint {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+  color: #9db8d1;
+}
+
+@media (max-width: 980px) {
+  .race-hud {
+    grid-template-columns: repeat(2, minmax(100px, auto));
+  }
+
+  .race-tip {
+    max-width: 95vw;
+  }
+}

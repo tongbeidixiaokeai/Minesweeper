@@ -1,0 +1,34 @@
+@echo off
+setlocal
+chcp 65001 >nul
+cd /d "%~dp0"
+
+where npm.cmd >nul 2>nul
+if errorlevel 1 (
+  echo [ERROR] Node.js / npm ?????????
+  echo ???? Node.js 18+?
+  pause
+  exit /b 1
+)
+
+if not exist node_modules (
+  echo [1/3] ??????...
+  call npm.cmd install
+  if errorlevel 1 goto :fail
+)
+
+echo [2/3] ???????...
+call npm.cmd run build
+if errorlevel 1 goto :fail
+
+echo [3/3] ?????????...
+call npm.cmd run preview -- --open
+if errorlevel 1 goto :fail
+
+goto :eof
+
+:fail
+echo.
+echo ???????????????
+pause
+exit /b 1

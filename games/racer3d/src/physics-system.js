@@ -1,4 +1,8 @@
-﻿import RAPIER from "@dimforge/rapier3d-compat";
+import RAPIER from "@dimforge/rapier3d-compat";
+
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
 
 export class PhysicsSystem {
   constructor(config) {
@@ -20,13 +24,25 @@ export class PhysicsSystem {
 
   createVehicleBody(id, spec, position, isPlayer) {
     const R = this.RAPIER;
-    const rb = this.world.createRigidBody(
-      R.RigidBodyDesc.dynamic()
-        .setTranslation(position.x, position.y, position.z)
-        .setLinearDamping(0.15)
-        .setAngularDamping(2.6)
-        .setEnabledRotations(false, true, false)
-    );
+    const bodyDesc = R.RigidBodyDesc.dynamic()
+      .setTranslation(position.x, position.y, position.z)
+      .setLinearDamping(0.15)
+      .setAngularDamping(2.6);
+
+    // Rapier APIs differ by version: try descriptor rotation locks when available.
+    if (typeof bodyDesc.setEnabledRotations === "function") {
+      bodyDesc.setEnabledRotations(false, true, false);
+    } else if (typeof bodyDesc.enabledRotations === "function") {
+      bodyDesc.enabledRotations(false, true, false);
+    }
+
+    const rb = this.world.createRigidBody(bodyDesc);
+    // Fallback for versions that only expose body-level rotation lock APIs.
+    if (typeof rb.setEnabledRotations === "function") {
+      rb.setEnabledRotations(false, true, false, true);
+    } else if (typeof rb.enabledRotations === "function") {
+      rb.enabledRotations(false, true, false, true);
+    }
     const collider = this.world.createCollider(
       R.ColliderDesc.cuboid(0.82, 0.45, 1.6)
         .setMass(spec.mass)
@@ -41,7 +57,23 @@ export class PhysicsSystem {
       collider,
       spec,
       isPlayer,
-      input: { throttle: 0, brake: 0, steer: 0, handbrake: false }
+      input: {
+        throttle: 0,
+        brake: 0,
+        steer: 0,
+        handbrake: false,
+        tractionAssist: isPlayer ? 0.58 : 0.52,
+        absAssist: isPlayer ? 0.56 : 0.48,
+        handbrakeGripFactor: isPlayer ? 0.56 : 0.54,
+        stabilityYawDamping: isPlayer ? 0.62 : 0.5
+      },
+      telemetry: {
+        slipRatio: 0,
+        longVel: 0,
+        latVel: 0,
+        yawRate: 0,
+        tractionCut: 0
+      }
     });
 
     return rb;
@@ -70,18 +102,33 @@ export class PhysicsSystem {
     const vel = body.linvel();
     const longVel = vel.x * forwardX + vel.z * forwardZ;
     const latVel = vel.x * rightX + vel.z * rightZ;
+    const longSpeedAbs = Math.abs(longVel);
 
-    const engine = input.throttle * spec.power;
-    const brakeForce = input.brake * spec.brakeForce * (longVel > 0 ? 1 : 0.6);
+    const tractionAssist = clamp(input.tractionAssist ?? 0.5, 0, 1);
+    const absAssist = clamp(input.absAssist ?? 0.5, 0, 1);
+    const handbrakeGripFactor = clamp(input.handbrakeGripFactor ?? 0.56, 0.2, 1);
+    const stabilityYawDamping = clamp(input.stabilityYawDamping ?? 0.55, 0, 1);
+
+    const slipRatioRaw = Math.abs(latVel) / Math.max(3.5, longSpeedAbs);
+    const slipRatio = clamp(slipRatioRaw, 0, 2);
+
+    const tractionCut = tractionAssist * clamp((slipRatio - 0.16) / 0.7, 0, 0.72);
+    const engine = input.throttle * spec.power * (1 - tractionCut);
+
+    const requestedBrake = input.brake * spec.brakeForce * (longVel > 0 ? 1 : 0.6);
+    const absSlipWindow = clamp((slipRatio - 0.2) / 0.8, 0, 1);
+    const absFactor = 1 - absAssist * absSlipWindow * 0.7;
+    const brakeForce = requestedBrake * clamp(absFactor, 0.35, 1);
+
     const drag = spec.aeroDrag * longVel * Math.abs(longVel);
-
     let force = engine - brakeForce - drag;
     if (input.handbrake) {
       force *= 0.72;
     }
 
-    const assistFactor = vehicle.isPlayer ? 0.9 : 0.82;
-    const targetLatReduction = -latVel * spec.tireGrip * assistFactor * (input.handbrake ? 0.45 : 1.0);
+    const gripAssist = 0.74 + tractionAssist * 0.45;
+    const handbrakeGrip = input.handbrake ? handbrakeGripFactor : 1;
+    const targetLatReduction = -latVel * spec.tireGrip * gripAssist * handbrakeGrip;
 
     const accelX = (force * forwardX + targetLatReduction * rightX) / Math.max(1, spec.mass);
     const accelZ = (force * forwardZ + targetLatReduction * rightZ) / Math.max(1, spec.mass);
@@ -90,13 +137,29 @@ export class PhysicsSystem {
     const nextVelZ = vel.z + accelZ * dt;
     body.setLinvel({ x: nextVelX, y: vel.y, z: nextVelZ }, true);
 
-    const steerEffect = input.steer * spec.steeringRate * (Math.min(1.3, Math.max(0.12, Math.abs(longVel) / 20)));
-    const driftGain = input.handbrake ? 1.45 : 1;
-    const yawRate = steerEffect * driftGain;
-    body.setAngvel({ x: 0, y: yawRate, z: 0 }, true);
+    const turnScale = Math.min(1.25, Math.max(0.14, longSpeedAbs / 21));
+    let yawTargetRate = input.steer * spec.steeringRate * turnScale;
+    if (input.handbrake) {
+      yawTargetRate *= 1.2;
+    }
+    const slipYawPenalty = 1 - clamp(slipRatio * (0.16 + stabilityYawDamping * 0.22), 0, 0.58);
+    yawTargetRate *= Math.max(0.42, slipYawPenalty);
 
-    const nextYaw = yaw + yawRate * dt;
+    const currentAng = body.angvel();
+    const yawBlend = clamp(0.22 + stabilityYawDamping * 0.42, 0.22, 0.78);
+    const nextYawRate = currentAng.y + (yawTargetRate - currentAng.y) * yawBlend;
+    body.setAngvel({ x: 0, y: nextYawRate, z: 0 }, true);
+
+    const nextYaw = yaw + nextYawRate * dt;
     body.setRotation({ x: 0, y: Math.sin(nextYaw / 2), z: 0, w: Math.cos(nextYaw / 2) }, true);
+
+    vehicle.telemetry = {
+      slipRatio,
+      longVel,
+      latVel,
+      yawRate: nextYawRate,
+      tractionCut
+    };
 
     if (position.y < -2 || Number.isNaN(position.x) || Number.isNaN(position.z)) {
       body.setTranslation({ x: 0, y: 0.35, z: 0 }, true);
@@ -136,7 +199,9 @@ export class PhysicsSystem {
       position: { x: t.x, y: t.y, z: t.z },
       velocity: { x: v.x, y: v.y, z: v.z },
       speed: Math.hypot(v.x, v.z),
-      yaw
+      yaw,
+      input: { ...entity.input },
+      telemetry: { ...entity.telemetry }
     };
   }
 
@@ -150,6 +215,13 @@ export class PhysicsSystem {
     const yaw = transform.yaw || 0;
     entity.body.setRotation({ x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) }, true);
     entity.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    entity.telemetry = {
+      slipRatio: 0,
+      longVel: 0,
+      latVel: 0,
+      yawRate: 0,
+      tractionCut: 0
+    };
   }
 
   quaternionToYaw(q) {

@@ -1,5 +1,7 @@
 ﻿# 开发进度缓存（接力文档）
 
+Original prompt: Implement 3D 赛车「手感稳定 + AI 提升」两阶段实施计划（全难度覆盖），含控制平滑、物理辅助、AI 状态机、前向感知和 F3 调试层。
+
 更新时间：2026-03-16
 
 ## 目标
@@ -83,3 +85,38 @@ npm run dev
 - 如果出现黑屏，优先检查：
   - 是否通过 Vite 本地服务打开（不要 file://）
   - 浏览器控制台是否报资源加载错误
+
+---
+
+## 2026-03-16 实施更新（手感稳定 + AI 提升）
+
+### 已完成
+- 三档难度参数扩展并重标定（`ControlConfig` / `AIConfig`）
+  - 新增控制参数：`steerMinFactor`、`steerFadeSpeed`、`throttleRise`、`throttleFall`、`brakeRise`、`brakeFall`、`stabilityYawDamping`
+  - 新增 AI 参数：`laneChangeCooldownSec`、`laneCommitSec`、`followGap`、`overtakeTriggerGap`、`maxBrakeOnFollow`
+- 玩家输入改为平滑输入（`getPlayerInput(vehicleState, dt)`）
+- 物理层真实接入辅助参数（牵引/ABS/手刹抓地/稳定阻尼），并输出 `slipRatio` 等遥测
+- 碰撞恢复改为“单次触发 + 冷却窗”
+- AI 改为状态机（`cruise/follow/overtake/recover`），并改用前向优先交通感知
+- 新增开发环境隐藏调试层（`F3` 切换）：
+  - 显示速度、输入、`slipRatio`、前车距离、AI 状态
+
+### 受限项
+- 当前终端环境缺少 Node/npm，无法在此环境执行：
+  - `npm run build`
+  - Playwright 自动回归
+
+### 2026-03-16 输入与诊断重构（继续）
+- 新增统一诊断模块：`games/racer3d/src/diagnostics.js`
+  - 捕获 `window error` / `unhandledrejection`
+  - 提供环形日志缓存与状态快照（phase/focus）
+- 输入链路重构：
+  - `VehicleController` 同时支持 `event.key + event.code`
+  - 新增输入事件计数与最近按键快照（用于定位 W / 方向键无效）
+- 焦点链路重构（大厅 iframe <-> 赛车页）：
+  - `postMessage` 协作聚焦（`arcade-request-focus` / `arcade-focus`）
+  - 页面切换、加载、点击都主动触发焦点修复
+- 调试面板默认开启，实时展示：
+  - 当前 phase / speed / slip / input
+  - 按键快照（lastKey/lastCode/pressed）
+  - 最近运行日志（启动、输入、race 事件、watchdog）

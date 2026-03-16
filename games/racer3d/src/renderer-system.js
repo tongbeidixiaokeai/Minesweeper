@@ -1,11 +1,10 @@
-﻿import * as THREE from "three";
+import * as THREE from "three";
 import {
   EffectComposer,
   RenderPass,
   EffectPass,
   BloomEffect,
   VignetteEffect,
-  FXAAEffect,
   SSAOEffect,
   ChromaticAberrationEffect,
   ToneMappingEffect,
@@ -109,6 +108,15 @@ export class RendererSystem {
 
     this.vehicleVisuals = new Map();
     this.effectsEnabled = false;
+    this.pixelRatioCap = 2;
+    this.lastHud = {
+      speed: "",
+      lap: "",
+      position: "",
+      difficulty: "",
+      state: "",
+      bestLap: ""
+    };
 
     this.host.appendChild(this.renderer.domElement);
     this.setupEnvironment();
@@ -152,28 +160,37 @@ export class RendererSystem {
     const renderPass = new RenderPass(this.scene, this.camera);
     this.composer.addPass(renderPass);
 
-    const effects = [];
-    effects.push(new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC }));
-    if (this.config.graphics.bloom) {
-      effects.push(new BloomEffect({ intensity: 0.34, luminanceThreshold: 0.52, luminanceSmoothing: 0.2 }));
-    }
-    if (this.config.graphics.ssao) {
-      effects.push(new SSAOEffect(this.camera, undefined, { blendFunction: 20, samples: 12, rings: 4, radius: 0.18, intensity: 1.35 }));
-    }
-    if (this.config.graphics.vignette) {
-      effects.push(new VignetteEffect({ darkness: 0.3, offset: 0.2 }));
-    }
-    if (this.config.graphics.motionBlur) {
-      effects.push(new ChromaticAberrationEffect(new THREE.Vector2(0.0006, 0.0008)));
-    }
-    if (this.config.graphics.fxaa) {
-      effects.push(new FXAAEffect());
-      effects.push(new SMAAEffect());
-    }
+    try {
+      const mergedEffects = [];
+      mergedEffects.push(new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC }));
+      if (this.config.graphics.bloom) {
+        mergedEffects.push(new BloomEffect({ intensity: 0.34, luminanceThreshold: 0.52, luminanceSmoothing: 0.2 }));
+      }
+      if (this.config.graphics.ssao) {
+        mergedEffects.push(new SSAOEffect(this.camera, undefined, { blendFunction: 20, samples: 12, rings: 4, radius: 0.18, intensity: 1.35 }));
+      }
+      if (this.config.graphics.vignette) {
+        mergedEffects.push(new VignetteEffect({ darkness: 0.3, offset: 0.2 }));
+      }
+      if (this.config.graphics.fxaa) {
+        mergedEffects.push(new SMAAEffect());
+      }
 
-    const pass = new EffectPass(this.camera, ...effects);
-    this.composer.addPass(pass);
-    this.effectsEnabled = true;
+      if (mergedEffects.length > 0) {
+        this.composer.addPass(new EffectPass(this.camera, ...mergedEffects));
+      }
+
+      // ChromaticAberrationEffect is a convolution effect and must be isolated.
+      if (this.config.graphics.motionBlur) {
+        this.composer.addPass(
+          new EffectPass(this.camera, new ChromaticAberrationEffect(new THREE.Vector2(0.0006, 0.0008)))
+        );
+      }
+      this.effectsEnabled = true;
+    } catch (err) {
+      console.warn("[racer3d] postprocessing disabled due to setup error:", err);
+      this.effectsEnabled = false;
+    }
   }
 
   setTrack(track) {
@@ -326,12 +343,47 @@ export class RendererSystem {
   }
 
   updateHud(data) {
-    this.hudRefs.speed.textContent = String(Math.round(data.speedKmh)).padStart(3, "0");
-    this.hudRefs.lap.textContent = `${data.lap}/${data.totalLaps}`;
-    this.hudRefs.position.textContent = `P${data.position}`;
-    this.hudRefs.difficulty.textContent = data.difficulty.toUpperCase();
-    this.hudRefs.state.textContent = data.state;
-    this.hudRefs.bestLap.textContent = data.bestLapText;
+    const speedText = String(Math.round(data.speedKmh)).padStart(3, "0");
+    const lapText = `${data.lap}/${data.totalLaps}`;
+    const positionText = `P${data.position}`;
+    const difficultyText = data.difficulty.toUpperCase();
+    const stateText = data.state;
+    const bestLapText = data.bestLapText;
+
+    if (this.lastHud.speed !== speedText) {
+      this.lastHud.speed = speedText;
+      this.hudRefs.speed.textContent = speedText;
+    }
+    if (this.lastHud.lap !== lapText) {
+      this.lastHud.lap = lapText;
+      this.hudRefs.lap.textContent = lapText;
+    }
+    if (this.lastHud.position !== positionText) {
+      this.lastHud.position = positionText;
+      this.hudRefs.position.textContent = positionText;
+    }
+    if (this.lastHud.difficulty !== difficultyText) {
+      this.lastHud.difficulty = difficultyText;
+      this.hudRefs.difficulty.textContent = difficultyText;
+    }
+    if (this.lastHud.state !== stateText) {
+      this.lastHud.state = stateText;
+      this.hudRefs.state.textContent = stateText;
+    }
+    if (this.lastHud.bestLap !== bestLapText) {
+      this.lastHud.bestLap = bestLapText;
+      this.hudRefs.bestLap.textContent = bestLapText;
+    }
+  }
+
+  setPostEffectsEnabled(enabled) {
+    this.effectsEnabled = Boolean(enabled);
+  }
+
+  setPixelRatioCap(value) {
+    const cap = Number(value);
+    this.pixelRatioCap = Number.isFinite(cap) ? Math.max(0.5, Math.min(2, cap)) : 2;
+    this.resize();
   }
 
   render() {
@@ -345,7 +397,7 @@ export class RendererSystem {
   resize() {
     const width = window.innerWidth;
     const height = window.innerHeight;
-    this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    this.renderer.setPixelRatio(Math.min(this.pixelRatioCap, window.devicePixelRatio || 1));
     this.renderer.setSize(width, height);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();

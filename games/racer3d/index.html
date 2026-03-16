@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -9,6 +9,8 @@
 <body>
   <main class="race-root">
     <div id="webgl-host" class="webgl-host" aria-label="3D 赛车渲染画布"></div>
+
+    <button id="menu-btn" class="race-menu-btn" type="button" aria-label="打开暂停菜单">菜单</button>
 
     <header class="race-hud">
       <div class="hud-item"><span>速度</span><strong id="speed">000</strong></div>
@@ -22,14 +24,39 @@
 
     <section class="race-tip">
       <p>
-        操作: A/D 或 ←/→ 转向, W/S 或 ↑/↓ 加减速, Space 手刹漂移, R 重开当前赛道, T 切换赛道, 1/2/3 切难度。
+        操作: A/D 或 ←/→ 转向, W/S 或 ↑/↓ 加减速, Space 手刹漂移, R 重开当前赛道, T 切换赛道, 1/2/3 切难度, F3 调试层（或 URL 加 ?diag=1）。
       </p>
+    </section>
+
+    <section id="debug-panel" class="debug-panel" aria-live="polite">
+      <pre id="debug-content">debug: waiting...</pre>
     </section>
 
     <section id="race-overlay" class="race-overlay is-hidden" aria-live="polite">
       <h2 id="overlay-title">RACE START</h2>
       <p id="overlay-body"></p>
-      <p class="overlay-hint">Enter 下一步</p>
+      <div id="overlay-actions" class="overlay-actions">
+        <button id="overlay-resume" class="overlay-btn" type="button">继续</button>
+        <button id="overlay-restart" class="overlay-btn" type="button">重开</button>
+        <button id="overlay-settings" class="overlay-btn" type="button">设置</button>
+      </div>
+      <section id="settings-panel" class="settings-panel is-hidden" aria-label="设置面板">
+        <div class="settings-row">
+          <label class="settings-label" for="setting-postfx">后处理</label>
+          <input id="setting-postfx" type="checkbox" checked>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label" for="setting-pixelratio">清晰度</label>
+          <input id="setting-pixelratio" type="range" min="0.75" max="2" step="0.05" value="2">
+          <span id="setting-pixelratio-value" class="settings-value">2.00</span>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label" for="setting-steer">转向灵敏度</label>
+          <input id="setting-steer" type="range" min="0.7" max="1.4" step="0.01" value="1">
+          <span id="setting-steer-value" class="settings-value">1.00</span>
+        </div>
+      </section>
+      <p class="overlay-hint">Esc 暂停 / Enter 下一步</p>
     </section>
   </main>
 

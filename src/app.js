@@ -1,4 +1,7 @@
-﻿(function () {
+import { postArcadeMessage, shouldBridgeKey, toKeyBridgePayload, isAllowedArcadeMessageOrigin, ARCADE_MESSAGE_TYPES } from "./arcade/bridge.js";
+import { byId } from "./shared/dom.js";
+
+(function () {
   "use strict";
 
   const STORAGE_KEY = "arcade.lastGame.v1";
@@ -17,10 +20,6 @@
       path: "./games/racer3d/index.html"
     }
   ];
-
-  function byId(id) {
-    return document.getElementById(id);
-  }
 
   function getSavedGameId() {
     try {
@@ -49,6 +48,9 @@
       if (!this.selectorEl || !this.titleEl || !this.descEl || !this.frameEl) {
         throw new Error("Arcade hub layout is incomplete.");
       }
+      this.frameEl.setAttribute("tabindex", "0");
+      this.frameEl.addEventListener("load", () => this.focusGameFrame());
+      this.frameEl.addEventListener("pointerdown", () => this.focusGameFrame());
 
       this.renderGameSelector();
 
@@ -56,13 +58,55 @@
       const initial = GAMES.find((item) => item.id === saved) || GAMES[0];
       this.openGame(initial.id);
 
+      window.addEventListener("message", (event) => {
+        if (!event || !event.data || typeof event.data !== "object") {
+          return;
+        }
+        if (event.data.type === ARCADE_MESSAGE_TYPES.requestFocus) {
+          if (!isAllowedArcadeMessageOrigin(event.origin || "")) return;
+          if (this.frameEl.contentWindow && event.source !== this.frameEl.contentWindow) return;
+          this.focusGameFrame();
+        }
+      });
+
       window.addEventListener("keydown", (event) => {
+        if (this.currentGameId === "racer3d" && shouldBridgeKey(event)) {
+          postArcadeMessage(this.frameEl.contentWindow, {
+            type: ARCADE_MESSAGE_TYPES.keyBridge,
+            payload: toKeyBridgePayload(event, "keydown")
+          });
+          if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " ", "Escape"].includes(event.key) || ["Space", "Escape"].includes(event.code)) {
+            event.preventDefault();
+          }
+        }
         if (event.key === "1") {
           this.openGame("minesweeper");
         } else if (event.key === "2") {
           this.openGame("racer3d");
         }
       });
+
+      window.addEventListener("keyup", (event) => {
+        if (this.currentGameId === "racer3d" && shouldBridgeKey(event)) {
+          postArcadeMessage(this.frameEl.contentWindow, {
+            type: ARCADE_MESSAGE_TYPES.keyBridge,
+            payload: toKeyBridgePayload(event, "keyup")
+          });
+          if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " ", "Escape"].includes(event.key) || ["Space", "Escape"].includes(event.code)) {
+            event.preventDefault();
+          }
+        }
+      });
+    }
+
+    focusGameFrame() {
+      try {
+        this.frameEl.contentWindow?.focus();
+        postArcadeMessage(this.frameEl.contentWindow, { type: ARCADE_MESSAGE_TYPES.focus });
+      } catch (_err) {
+        // Ignore cross-window focus failures.
+      }
+      this.frameEl.focus();
     }
 
     renderGameSelector() {
@@ -86,6 +130,7 @@
         return;
       }
       if (this.currentGameId === target.id) {
+        this.focusGameFrame();
         return;
       }
 
@@ -94,6 +139,7 @@
       this.descEl.textContent = target.desc;
       this.frameEl.src = target.path;
       saveGameId(target.id);
+      window.setTimeout(() => this.focusGameFrame(), 0);
 
       const options = this.selectorEl.querySelectorAll(".game-option");
       for (let i = 0; i < options.length; i += 1) {

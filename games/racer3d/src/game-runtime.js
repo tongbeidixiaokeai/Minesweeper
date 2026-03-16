@@ -1,4 +1,4 @@
-﻿import * as THREE from "three";
+import * as THREE from "three";
 import { ASSET_MANIFEST, DEFAULT_CONFIG, DIFFICULTY_PRESETS, TRACKS, VEHICLE_SPECS } from "./config.js";
 import { EventBus } from "./events.js";
 import { AssetPipeline } from "./asset-pipeline.js";
@@ -17,16 +17,28 @@ function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
 
+function fmt(value, digits = 2) {
+  if (!Number.isFinite(value)) {
+    return "--";
+  }
+  return Number(value).toFixed(digits);
+}
+
 function vehicleColor(index) {
   const palette = [0x45a2ff, 0xff9a42, 0x59d283, 0xc87cff, 0xff5f77, 0x43cad2];
   return palette[index % palette.length];
 }
 
+const SETTINGS_KEY = "racer3d.settings.v1";
+
 export class GameRuntime {
-  constructor(root, hudRefs, overlayRefs) {
+  constructor(root, hudRefs, overlayRefs, debugRefs = {}, options = {}) {
     this.root = root;
     this.hud = hudRefs;
     this.overlay = overlayRefs;
+    this.debug = debugRefs;
+    this.isDev = Boolean(options.isDev);
+    this.diagnostics = options.diagnostics || null;
 
     this.events = new EventBus();
     this.config = cloneConfig(DEFAULT_CONFIG);
@@ -35,7 +47,9 @@ export class GameRuntime {
     this.assetPipeline = new AssetPipeline(ASSET_MANIFEST);
     this.physics = new PhysicsSystem(this.config.physics);
     this.renderer = new RendererSystem(root, hudRefs, this.config);
-    this.vehicleController = new VehicleController(this.config.controls);
+    this.vehicleController = new VehicleController(this.config.controls, {
+      onInputEvent: (payload) => this.onInputEvent(payload)
+    });
     this.aiController = new AIController(this.config.ai);
     this.raceRules = new RaceRules(this.events);
 
@@ -48,29 +62,93 @@ export class GameRuntime {
     this.championshipPositions = [];
     this.awaitNext = false;
     this.pendingAdvance = null;
+    this.debugVisible = Boolean(options.startWithDebug);
+    this.lastCrashAt = 0;
+    this.crashCooldownMs = 900;
+    this.noMoveWhileThrottleSec = 0;
+    this.paused = false;
 
     this.lastTime = performance.now();
 
     this.bindEvents();
   }
 
+  info(scope, message, meta = null) {
+    this.diagnostics?.info(scope, message, meta);
+  }
+
+  warn(scope, message, meta = null) {
+    this.diagnostics?.warn(scope, message, meta);
+  }
+
+  error(scope, message, meta = null) {
+    this.diagnostics?.error(scope, message, meta);
+  }
+
+  onInputEvent(payload) {
+    if (!payload) {
+      return;
+    }
+    if (payload.type === "keydown") {
+      this.info("input", `keydown ${payload.code || payload.key}`, {
+        key: payload.key || "",
+        repeat: payload.repeat ? "1" : "0",
+        special: payload.extra?.specialKey || ""
+      });
+    }
+    if (payload.type === "keyup") {
+      this.info("input", `keyup ${payload.code || payload.key}`, {
+        key: payload.key || ""
+      });
+    }
+  }
+
+  forwardKeyEvent(payload) {
+    this.vehicleController.handleExternalEvent(payload);
+  }
+
   async init() {
     this.showOverlay("LOADING", "正在加载高质量资源与物理系统...");
-    this.assets = await this.assetPipeline.loadAll();
-    await this.physics.init();
+    this.info("init", "runtime init start");
+    this.diagnostics?.setState("phase", this.raceRules.phase);
+    if (this.debugVisible) {
+      this.setDebugVisible(true);
+    }
+    try {
+      this.assets = await this.assetPipeline.loadAll();
+      this.info("init", "assets loaded");
+      await this.physics.init();
+      this.info("init", "physics initialized");
 
-    this.vehicleController.bindInput((key) => this.handleSpecialKey(key));
+      this.vehicleController.bindInput((key) => this.handleSpecialKey(key));
+      this.info("init", "input listeners bound");
 
-    this.startChampionship();
-    requestAnimationFrame((time) => this.frame(time));
+      this.applyPersistedSettings();
+
+      this.startChampionship();
+      this.info("init", "championship started");
+      requestAnimationFrame((time) => this.frame(time));
+    } catch (err) {
+      console.error("[racer3d:init]", err);
+      const detail = err instanceof Error ? err.message : String(err);
+      this.hud.state.textContent = "ERROR";
+      this.error("init", "runtime init failed", { detail });
+      this.showOverlay("INIT FAILED", `初始化失败，请打开控制台查看错误。\n${detail}`);
+    }
   }
 
   bindEvents() {
     this.events.on("onRaceCountdown", (payload) => {
+      this.diagnostics?.setState("phase", "countdown");
       this.showOverlay(`START IN ${payload.value}`, "锦标赛模式: 保持节奏，精准走线。");
     });
 
     this.events.on("onRaceStart", () => {
+      this.diagnostics?.setState("phase", "running");
+      this.info("race", "race started", {
+        track: this.currentTrack?.id || "",
+        difficulty: this.difficulty
+      });
       this.hideOverlay();
     });
 
@@ -87,6 +165,7 @@ export class GameRuntime {
       }
     });
     this.events.on("onCrash", ({ impactSpeed }) => {
+      this.warn("race", "crash detected", { impactSpeed });
       this.hud.state.textContent = "HIT";
       if (impactSpeed > 20) {
         this.showOverlay("HEAVY IMPACT", "注意入弯速度与走线，避免连续碰撞。\n");
@@ -99,6 +178,11 @@ export class GameRuntime {
     });
 
     this.events.on("onRaceFinish", (result) => {
+      this.diagnostics?.setState("phase", "finished");
+      this.info("race", "race finished", {
+        position: result.position,
+        bestLap: result.bestLap
+      });
       this.championshipPositions.push(result.position);
       const bestLapText = result.bestLap > 0 ? msToText(result.bestLap) : "--:--";
       this.showOverlay(
@@ -121,9 +205,19 @@ export class GameRuntime {
         );
       }
     });
+    try {
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) {
+          this.setPaused(true, "hidden");
+        }
+      });
+      window.addEventListener("blur", () => this.setPaused(true, "blur"));
+    } catch (_err) {
+    }
   }
 
   startChampionship() {
+    this.info("race", "start championship");
     this.trackIndex = 0;
     this.championshipPositions = [];
     this.awaitNext = false;
@@ -141,6 +235,10 @@ export class GameRuntime {
   }
 
   startRace(track) {
+    this.info("race", "start race", {
+      track: track?.id || "",
+      difficulty: this.difficulty
+    });
     this.currentTrack = track;
     this.applyDifficultyPreset();
 
@@ -228,6 +326,16 @@ export class GameRuntime {
   }
 
   handleSpecialKey(key) {
+    if (key === "Escape") {
+      this.setPaused(!this.paused, "esc");
+      return;
+    }
+    if (key === "F3") {
+      this.setDebugVisible(!this.debugVisible);
+      this.info("input", "toggle debug panel", { visible: this.debugVisible ? 1 : 0 });
+      return;
+    }
+
     if (key === "Enter") {
       if (this.awaitNext) {
         if (this.pendingAdvance === "nextRace") {
@@ -263,34 +371,119 @@ export class GameRuntime {
     }
   }
 
-  findNearestVehicleDistance(vehicleId) {
-    const self = this.entities.get(vehicleId);
-    if (!self) {
-      return Infinity;
+  setDebugVisible(nextVisible) {
+    if (!this.debug || !this.debug.panel) {
+      this.debugVisible = false;
+      return;
+    }
+    this.debugVisible = Boolean(nextVisible);
+    this.debug.panel.classList.toggle("is-visible", this.debugVisible);
+    try {
+      window.localStorage.setItem("racer3d.debug.visible", this.debugVisible ? "1" : "0");
+    } catch (_err) {
+      // Ignore storage failures.
+    }
+  }
+
+  getTrafficInfo(vehicleId, knownState = null) {
+    const selfState = knownState || this.physics.getVehicleState(vehicleId);
+    if (!selfState || !this.currentTrack) {
+      return {
+        frontDistance: Infinity,
+        frontRelativeSpeed: 0,
+        nearestDistance: Infinity,
+        leftClearance: Infinity,
+        rightClearance: Infinity
+      };
     }
 
-    const selfState = this.physics.getVehicleState(vehicleId);
-    if (!selfState) {
-      return Infinity;
-    }
+    const yaw = selfState.yaw;
+    const forwardX = Math.sin(yaw);
+    const forwardZ = Math.cos(yaw);
+    const rightX = Math.cos(yaw);
+    const rightZ = -Math.sin(yaw);
 
-    let best = Infinity;
-    this.entities.forEach((entity) => {
+    let frontDistance = Infinity;
+    let frontRelativeSpeed = 0;
+    let nearestDistance = Infinity;
+    let leftClearance = Infinity;
+    let rightClearance = Infinity;
+
+    for (const entity of this.entities.values()) {
       if (entity.id === vehicleId) {
-        return;
+        continue;
       }
       const other = this.physics.getVehicleState(entity.id);
       if (!other) {
-        return;
+        continue;
       }
+
       const dx = other.position.x - selfState.position.x;
       const dz = other.position.z - selfState.position.z;
-      const d = Math.hypot(dx, dz);
-      if (d < best) {
-        best = d;
+      const distance = Math.hypot(dx, dz);
+      nearestDistance = Math.min(nearestDistance, distance);
+
+      const localForward = dx * forwardX + dz * forwardZ;
+      const localLateral = dx * rightX + dz * rightZ;
+
+      if (
+        localForward > 0
+        && localForward < 32
+        && Math.abs(localLateral) < this.currentTrack.width * 0.78
+        && localForward < frontDistance
+      ) {
+        frontDistance = localForward;
+        frontRelativeSpeed = other.speed - selfState.speed;
       }
-    });
-    return best;
+
+      if (localForward > -4 && localForward < 12) {
+        if (localLateral < -0.15) {
+          leftClearance = Math.min(leftClearance, distance);
+        } else if (localLateral > 0.15) {
+          rightClearance = Math.min(rightClearance, distance);
+        }
+      }
+    }
+
+    return {
+      frontDistance,
+      frontRelativeSpeed,
+      nearestDistance,
+      leftClearance: Number.isFinite(leftClearance) ? leftClearance : this.currentTrack.width * 1.4,
+      rightClearance: Number.isFinite(rightClearance) ? rightClearance : this.currentTrack.width * 1.4
+    };
+  }
+
+  updateDebugPanel(dt) {
+    if (!this.debugVisible || !this.debug || !this.debug.content) {
+      return;
+    }
+
+    const player = this.physics.getVehicleState("player");
+    if (!player) {
+      this.debug.content.textContent = "debug: waiting for player state";
+      return;
+    }
+
+    const traffic = this.getTrafficInfo("player", player);
+    const aiSampleId = this.config.race.aiCount > 0 ? "ai-1" : "";
+    const aiDebug = aiSampleId ? this.aiController.getDebugState(aiSampleId) : null;
+    const keyDebug = this.vehicleController.getDiagnosticsSnapshot();
+    const logText = this.diagnostics ? this.diagnostics.renderText(6) : "diagnostics unavailable";
+
+    this.debug.content.textContent = [
+      `phase=${this.raceRules.phase} debug=${this.debugVisible ? "on" : "off"} dev=${this.isDev ? "1" : "0"}`,
+      `dt=${fmt(dt, 3)} speed=${fmt(player.speed * 3.6, 1)}km/h yaw=${fmt(player.yaw, 2)}`,
+      `slip=${fmt(player.telemetry?.slipRatio ?? 0, 3)} long=${fmt(player.telemetry?.longVel ?? 0, 2)} lat=${fmt(player.telemetry?.latVel ?? 0, 2)}`,
+      `input th=${fmt(player.input?.throttle ?? 0, 2)} br=${fmt(player.input?.brake ?? 0, 2)} st=${fmt(player.input?.steer ?? 0, 2)}`,
+      `key last=${keyDebug.lastCode || keyDebug.lastKey || "--"} src=${keyDebug.lastSource || "--"} down=${keyDebug.keydown}/${keyDebug.bridgedKeydown} up=${keyDebug.keyup}/${keyDebug.bridgedKeyup} pressed=[${keyDebug.pressed.join(",")}]`,
+      `front=${Number.isFinite(traffic.frontDistance) ? fmt(traffic.frontDistance, 2) : "--"} rel=${fmt(traffic.frontRelativeSpeed, 2)} near=${fmt(traffic.nearestDistance, 2)}`,
+      aiDebug
+        ? `ai(${aiSampleId}) mode=${aiDebug.mode} front=${aiDebug.frontDistance == null ? "--" : fmt(aiDebug.frontDistance, 2)} lane=${fmt(aiDebug.lane, 2)} th=${fmt(aiDebug.throttle, 2)} br=${fmt(aiDebug.brake, 2)}`
+        : "ai debug: unavailable",
+      "----- logs -----",
+      logText
+    ].join("\n");
   }
 
   updateProgressTracking() {
@@ -311,7 +504,7 @@ export class GameRuntime {
     const playerState = this.physics.getVehicleState("player");
 
     if (this.raceRules.isRunning()) {
-      const playerInput = this.vehicleController.getPlayerInput(playerState);
+      const playerInput = this.vehicleController.getPlayerInput(playerState, dt);
       this.physics.setInput("player", playerInput);
 
       this.entities.forEach((entity) => {
@@ -324,13 +517,24 @@ export class GameRuntime {
           renderer: this.renderer,
           track: this.currentTrack,
           progressByVehicle: this.progressByVehicle,
-          findNearestVehicleDistance: (id) => this.findNearestVehicleDistance(id)
+          getTrafficInfo: (id, knownState) => this.getTrafficInfo(id, knownState)
         });
-        this.physics.setInput(entity.id, aiInput);
+        this.physics.setInput(entity.id, {
+          ...aiInput,
+          tractionAssist: Math.max(0.18, this.config.controls.tractionAssist * 0.78),
+          absAssist: Math.max(0.16, this.config.controls.absAssist * 0.72),
+          handbrakeGripFactor: Math.max(0.4, this.config.controls.handbrakeGripFactor * 0.9),
+          stabilityYawDamping: Math.max(0.35, this.config.controls.stabilityYawDamping * 0.82)
+        });
       });
     } else {
       this.entities.forEach((entity) => {
-        this.physics.setInput(entity.id, { throttle: 0, brake: 1, steer: 0, handbrake: false });
+        this.physics.setInput(entity.id, {
+          throttle: 0,
+          brake: 1,
+          steer: 0,
+          handbrake: false
+        });
       });
     }
   }
@@ -364,12 +568,18 @@ export class GameRuntime {
 
   showOverlay(title, body) {
     this.overlay.root.classList.remove("is-hidden");
+    this.overlay.root.classList.remove("is-menu");
     this.overlay.title.textContent = title;
     this.overlay.body.textContent = body;
   }
 
   hideOverlay() {
     this.overlay.root.classList.add("is-hidden");
+    this.overlay.root.classList.remove("is-menu");
+    const panel = document.getElementById("settings-panel");
+    if (panel) {
+      panel.classList.add("is-hidden");
+    }
   }
 
   detectPlayerCrash() {
@@ -377,52 +587,192 @@ export class GameRuntime {
     if (!player || !this.raceRules.isRunning()) {
       return;
     }
-    this.entities.forEach((entity) => {
+    const now = performance.now();
+    if (now - this.lastCrashAt < this.crashCooldownMs) {
+      return;
+    }
+
+    for (const entity of this.entities.values()) {
       if (entity.isPlayer) {
-        return;
+        continue;
       }
       const ai = this.physics.getVehicleState(entity.id);
       if (!ai) {
-        return;
+        continue;
       }
       const dx = ai.position.x - player.position.x;
       const dz = ai.position.z - player.position.z;
       const dist = Math.hypot(dx, dz);
       if (dist > 1.55) {
-        return;
+        continue;
       }
       const relativeSpeed = Math.abs(player.speed - ai.speed);
       if (relativeSpeed < 8) {
-        return;
+        continue;
       }
 
-      const damp = 0.58;
+      const damp = clamp(0.72 - relativeSpeed / 70, 0.45, 0.66);
       this.physics.setVehicleTransform("player", {
         position: player.position,
         velocity: { x: player.velocity.x * damp, y: player.velocity.y, z: player.velocity.z * damp },
         yaw: player.yaw
       });
 
+      this.lastCrashAt = now;
       this.events.emit("onCrash", {
         with: entity.id,
         impactSpeed: relativeSpeed,
         distance: dist
       });
-    });
+      break;
+    }
   }
   frame(time) {
     const dt = clamp((time - this.lastTime) / 1000, 0, 0.05);
     this.lastTime = time;
+    this.diagnostics?.setState("phase", this.raceRules.phase);
+    if (!this.paused) {
+      this.raceRules.tick(dt);
+      this.applyInputs(dt);
+      this.physics.step(dt);
+      this.detectPlayerCrash();
+      this.updateProgressTracking();
+      this.syncVisualsAndHud();
+      this.updateDebugPanel(dt);
+      this.renderer.render();
+    } else {
+      this.syncVisualsAndHud();
+      this.renderer.render();
+    }
 
-    this.raceRules.tick(dt);
-    this.applyInputs(dt);
-    this.physics.step(dt);
-    this.detectPlayerCrash();
-    this.updateProgressTracking();
-    this.syncVisualsAndHud();
-    this.renderer.render();
+    const player = this.physics.getVehicleState("player");
+    if (this.raceRules.isRunning() && player) {
+      const throttle = player.input?.throttle || 0;
+      if (throttle > 0.45 && player.speed < 0.45) {
+        this.noMoveWhileThrottleSec += dt;
+        if (this.noMoveWhileThrottleSec > 2.2) {
+          this.warn("watchdog", "throttle high but speed low", {
+            throttle,
+            speed: player.speed,
+            phase: this.raceRules.phase
+          });
+          this.noMoveWhileThrottleSec = 0;
+        }
+      } else {
+        this.noMoveWhileThrottleSec = 0;
+      }
+    } else {
+      this.noMoveWhileThrottleSec = 0;
+    }
 
     requestAnimationFrame((next) => this.frame(next));
+  }
+
+  setPaused(next, reason = "") {
+    const willPause = Boolean(next);
+    if (this.paused === willPause) {
+      return;
+    }
+    this.paused = willPause;
+    if (this.paused) {
+      this.vehicleController.clearInputState("pause");
+      this.showMenuOverlay();
+      this.info("pause", "paused", { reason });
+    } else {
+      this.hideOverlay();
+      this.info("pause", "resumed", { reason });
+    }
+  }
+
+  showMenuOverlay() {
+    this.overlay.root.classList.add("is-menu");
+    this.overlay.root.classList.remove("is-hidden");
+    this.overlay.title.textContent = "PAUSED";
+    this.overlay.body.textContent = "暂停中";
+    const resume = document.getElementById("overlay-resume");
+    const restart = document.getElementById("overlay-restart");
+    const settings = document.getElementById("overlay-settings");
+    const panel = document.getElementById("settings-panel");
+    const pixel = document.getElementById("setting-pixelratio");
+    const pixelVal = document.getElementById("setting-pixelratio-value");
+    const postfx = document.getElementById("setting-postfx");
+    const steer = document.getElementById("setting-steer");
+    const steerVal = document.getElementById("setting-steer-value");
+    if (resume) resume.onclick = () => this.setPaused(false, "menu");
+    if (restart) restart.onclick = () => { this.startRace(this.currentTrack); this.setPaused(false, "menu-restart"); };
+    if (settings && panel) {
+      settings.onclick = () => {
+        panel.classList.toggle("is-hidden");
+      };
+    }
+    if (pixel && pixelVal) {
+      const update = () => {
+        pixelVal.textContent = Number(pixel.value).toFixed(2);
+        this.renderer.setPixelRatioCap(Number(pixel.value));
+        this.savePersistedSettings({ pixelRatioCap: Number(pixel.value) });
+      };
+      pixel.oninput = update;
+      const loaded = this.loadPersistedSettings();
+      if (loaded.pixelRatioCap != null) {
+        pixel.value = String(loaded.pixelRatioCap);
+      }
+      update();
+    }
+    if (postfx) {
+      const loaded = this.loadPersistedSettings();
+      postfx.checked = loaded.postfx != null ? Boolean(loaded.postfx) : this.renderer.effectsEnabled;
+      postfx.onchange = () => {
+        this.renderer.setPostEffectsEnabled(Boolean(postfx.checked));
+        this.savePersistedSettings({ postfx: Boolean(postfx.checked) });
+      };
+    }
+    if (steer && steerVal) {
+      const updateSteer = () => {
+        steerVal.textContent = Number(steer.value).toFixed(2);
+        this.config.controls.steerSensitivity = Number(steer.value);
+        this.vehicleController.updateAssistConfig(this.config.controls);
+        this.savePersistedSettings({ steerSensitivity: Number(steer.value) });
+      };
+      const loaded = this.loadPersistedSettings();
+      const initial = Number.isFinite(loaded.steerSensitivity) ? loaded.steerSensitivity : this.config.controls.steerSensitivity;
+      steer.value = String(Number(initial).toFixed(2));
+      updateSteer();
+      steer.oninput = updateSteer;
+    }
+  }
+
+  loadPersistedSettings() {
+    try {
+      const raw = window.localStorage.getItem(SETTINGS_KEY);
+      if (!raw) return {};
+      const data = JSON.parse(raw);
+      return data && typeof data === "object" ? data : {};
+    } catch (_err) {
+      return {};
+    }
+  }
+
+  savePersistedSettings(partial) {
+    const current = this.loadPersistedSettings();
+    const next = { ...current, ...(partial && typeof partial === "object" ? partial : {}) };
+    try {
+      window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+    } catch (_err) {
+    }
+  }
+
+  applyPersistedSettings() {
+    const s = this.loadPersistedSettings();
+    if (typeof s.postfx === "boolean") {
+      this.renderer.setPostEffectsEnabled(s.postfx);
+    }
+    if (Number.isFinite(s.pixelRatioCap)) {
+      this.renderer.setPixelRatioCap(s.pixelRatioCap);
+    }
+    if (Number.isFinite(s.steerSensitivity)) {
+      this.config.controls.steerSensitivity = s.steerSensitivity;
+      this.vehicleController.updateAssistConfig(this.config.controls);
+    }
   }
 }
 
